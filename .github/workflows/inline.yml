@@ -50,6 +50,7 @@ jobs:
       # 不写 '3.14'——那会跟着 runner 的补丁版本漂移（实测一天内从 .9 跳到 .10）。
       # 输入校验放在最前面：宁可 5 秒失败，也不要跑完 30 分钟才发现 project 不合法
       - name: 校验输入
+        id: validate
         env:
           PROJECT_RAW: ${{ inputs.project }}
           TIMEOUT_MIN: ${{ inputs.timeout_min }}
@@ -74,6 +75,7 @@ jobs:
           python-version-file: toolenv/python-version.txt
 
       - name: 安装工具库环境
+        id: install
         run: |
           if [ -f toolenv/requirements.txt ]; then
             python -m pip install --no-input --quiet -r toolenv/requirements.txt
@@ -107,12 +109,16 @@ jobs:
           PY
 
       - name: 执行
+        id: run_script
         env:
           SCRIPT_NAME: ${{ inputs.script_name }}
         run: python "$SCRIPT_NAME"
 
+      # 只在环境真的装成功之后才发布。
+      # 校验失败或安装失败时发布，会拿 runner 的系统 Python 生成一份假的环境快照
+      # （python 3.12.3、toolenv_drift 全 null、frozen 是 84 行系统包），比不发还糟。
       - name: 发布到 Release
-        if: always()
+        if: always() && steps.validate.outcome == 'success' && steps.install.outcome == 'success'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           RUN_ID: ${{ github.run_id }}
@@ -121,6 +127,7 @@ jobs:
           TIMEOUT_MIN: ${{ inputs.timeout_min }}
           LABEL: ${{ inputs.label }}
           PROJECT_RAW: ${{ inputs.project }}
+          SCRIPT_OUTCOME: ${{ steps.run_script.outcome }}
           REF: ${{ github.ref_name }}
           REPO: ${{ github.repository }}
         run: |
@@ -177,6 +184,7 @@ jobs:
               "project_raw": os.environ.get("PROJ_RAW", ""),
               "label": os.environ.get("LABEL", ""),
               "script_name": os.environ["SCRIPT_NAME"],
+              "script_outcome": os.environ.get("SCRIPT_OUTCOME", ""),
               "extra_requirements": os.environ.get("EXTRA_REQS", ""),
               "timeout_min": os.environ.get("TIMEOUT_MIN", ""),
               "ref": os.environ.get("REF", ""),
