@@ -1,4 +1,5 @@
 # 不推代码：脚本正文通过 workflow_dispatch 输入传入，运行时落盘执行。
+# 结果发布到 GitHub Release（不是 artifact）：永久链接、公开可下、无需认证。
 name: inline
 
 on:
@@ -19,6 +20,9 @@ on:
         description: '超时分钟（上限 360）'
         required: false
         default: '30'
+
+permissions:
+  contents: write      # 发布 Release 需要
 
 jobs:
   run:
@@ -54,11 +58,23 @@ jobs:
           SCRIPT_NAME: ${{ inputs.script_name }}
         run: python "$SCRIPT_NAME"
 
-      - name: 取回产物
+      - name: 发布到 Release
         if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: outputs-${{ github.run_id }}
-          path: outputs/
-          if-no-files-found: warn
-          retention-days: 7
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RUN_ID: ${{ github.run_id }}
+          SCRIPT_NAME: ${{ inputs.script_name }}
+        run: |
+          set -eu
+          mkdir -p _publish
+          [ -f "$SCRIPT_NAME" ] && cp "$SCRIPT_NAME" _publish/
+          if [ -d outputs ] && [ -n "$(ls -A outputs)" ]; then
+            cp -r outputs/. _publish/
+          fi
+          echo "--- 待发布 ---"; ls -la _publish
+          TAG="run-$RUN_ID"
+          gh release create "$TAG" _publish/* \
+            --title "run $RUN_ID" \
+            --notes "inline 工作流产物。原始脚本随附为资产，可直接复跑。" \
+            || gh release upload "$TAG" _publish/* --clobber
+          echo "RELEASE_TAG=$TAG"
