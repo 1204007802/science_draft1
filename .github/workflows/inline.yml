@@ -104,6 +104,14 @@ jobs:
           REPO: ${{ github.repository }}
         run: |
           set -eu
+
+          # 项目 slug：小写、只留 [a-z0-9._-]。中文等字符会变成 '-'，所以要用 ASCII。
+          # 必须在写 run_meta 之前算好，否则 meta 里记不到。
+          PROJ=$(printf '%s' "${PROJECT_RAW:-default}" | tr 'A-Z' 'a-z' | sed 's/[^a-z0-9._-]/-/g')
+          [ -n "$PROJ" ] || PROJ=default
+          export PROJ
+          echo "project=$PROJ"
+
           mkdir -p _publish
           [ -f "$SCRIPT_NAME" ] && cp "$SCRIPT_NAME" _publish/
 
@@ -168,12 +176,6 @@ jobs:
           PY
 
           echo "--- 待发布 ---"; ls -la _publish
-
-          # 项目 slug：小写、只留 [a-z0-9._-]。中文等字符会变成 '-'，所以要用 ASCII。
-          PROJ=$(printf '%s' "${PROJECT_RAW:-default}" | tr 'A-Z' 'a-z' | sed 's/[^a-z0-9._-]/-/g')
-          [ -n "$PROJ" ] || PROJ=default
-          export PROJ
-          echo "project=$PROJ"
           TAG="run-$PROJ-$RUN_ID"
           mapfile -d '' FILES < <(find _publish -maxdepth 1 -type f -print0)
           if [ "${#FILES[@]}" -eq 0 ]; then
