@@ -42,9 +42,11 @@ jobs:
           sparse-checkout: toolenv
           sparse-checkout-cone-mode: false
 
+      # Python 版本也由工具库定义，和包一起钉死在 toolenv/ 里。
+      # 不写 '3.14'——那会跟着 runner 的补丁版本漂移（实测一天内从 .9 跳到 .10）。
       - uses: actions/setup-python@v5
         with:
-          python-version: '3.14'
+          python-version-file: toolenv/python-version.txt
 
       - name: 安装工具库环境
         run: |
