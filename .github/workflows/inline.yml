@@ -48,6 +48,27 @@ jobs:
 
       # Python 版本也由工具库定义，和包一起钉死在 toolenv/ 里。
       # 不写 '3.14'——那会跟着 runner 的补丁版本漂移（实测一天内从 .9 跳到 .10）。
+      # 输入校验放在最前面：宁可 5 秒失败，也不要跑完 30 分钟才发现 project 不合法
+      - name: 校验输入
+        env:
+          PROJECT_RAW: ${{ inputs.project }}
+          TIMEOUT_MIN: ${{ inputs.timeout_min }}
+        run: |
+          set -eu
+          RAW="${PROJECT_RAW:-default}"
+          case "$RAW" in
+            *[!A-Za-z0-9._-]*)
+              echo "::error::project 只能包含 [A-Za-z0-9._-]，收到 '$RAW'。"
+              echo "::error::中文请换成 ASCII slug，例如 aero。否则 tag 会退化成 ---- 且无法区分。"
+              exit 1 ;;
+          esac
+          case "${TIMEOUT_MIN:-30}" in
+            *[!0-9]*|'')
+              echo "::error::timeout_min 必须是整数字符串，收到 '${TIMEOUT_MIN}'。"
+              exit 1 ;;
+          esac
+          echo "project=$RAW  timeout_min=${TIMEOUT_MIN:-30}"
+
       - uses: actions/setup-python@v5
         with:
           python-version-file: toolenv/python-version.txt
@@ -105,12 +126,13 @@ jobs:
         run: |
           set -eu
 
-          # 项目 slug：小写、只留 [a-z0-9._-]。中文等字符会变成 '-'，所以要用 ASCII。
+          # 字符集已在「校验输入」步骤把关，这里只做小写归一。
           # 必须在写 run_meta 之前算好，否则 meta 里记不到。
-          PROJ=$(printf '%s' "${PROJECT_RAW:-default}" | tr 'A-Z' 'a-z' | sed 's/[^a-z0-9._-]/-/g')
+          PROJ=$(printf '%s' "${PROJECT_RAW:-default}" | tr 'A-Z' 'a-z')
           [ -n "$PROJ" ] || PROJ=default
           export PROJ
-          echo "project=$PROJ"
+          export PROJ_RAW="${PROJECT_RAW:-default}"
+          echo "project=$PROJ" 
 
           mkdir -p _publish
           [ -f "$SCRIPT_NAME" ] && cp "$SCRIPT_NAME" _publish/
@@ -152,6 +174,7 @@ jobs:
           meta = {
               "run_id": os.environ["RUN_ID"],
               "project": os.environ.get("PROJ", ""),
+              "project_raw": os.environ.get("PROJ_RAW", ""),
               "label": os.environ.get("LABEL", ""),
               "script_name": os.environ["SCRIPT_NAME"],
               "extra_requirements": os.environ.get("EXTRA_REQS", ""),
