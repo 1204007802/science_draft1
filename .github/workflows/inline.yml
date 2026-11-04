@@ -21,12 +21,16 @@ on:
         description: '超时分钟，必须是整数字符串（默认 30，上限 360）'
         required: false
         default: '30'
+      project:
+        description: '项目 slug（ASCII，如 aero），用于区分 Release。不填则记 default'
+        required: false
+        default: 'default'
       label:
         description: '给这次运行起个名字，便于在列表里认领'
         required: false
         default: ''
 
-run-name: "${{ inputs.script_name }} · ${{ inputs.label || github.actor }} · run ${{ github.run_id }}"
+run-name: "${{ inputs.project }} · ${{ inputs.script_name }} · ${{ inputs.label || github.actor }} · run ${{ github.run_id }}"
 
 permissions:
   contents: write      # 发布 Release 需要
@@ -95,6 +99,7 @@ jobs:
           EXTRA_REQS: ${{ inputs.requirements }}
           TIMEOUT_MIN: ${{ inputs.timeout_min }}
           LABEL: ${{ inputs.label }}
+          PROJECT_RAW: ${{ inputs.project }}
           REF: ${{ github.ref_name }}
           REPO: ${{ github.repository }}
         run: |
@@ -138,6 +143,7 @@ jobs:
 
           meta = {
               "run_id": os.environ["RUN_ID"],
+              "project": os.environ.get("PROJ", ""),
               "label": os.environ.get("LABEL", ""),
               "script_name": os.environ["SCRIPT_NAME"],
               "extra_requirements": os.environ.get("EXTRA_REQS", ""),
@@ -162,7 +168,13 @@ jobs:
           PY
 
           echo "--- 待发布 ---"; ls -la _publish
-          TAG="run-$RUN_ID"
+
+          # 项目 slug：小写、只留 [a-z0-9._-]。中文等字符会变成 '-'，所以要用 ASCII。
+          PROJ=$(printf '%s' "${PROJECT_RAW:-default}" | tr 'A-Z' 'a-z' | sed 's/[^a-z0-9._-]/-/g')
+          [ -n "$PROJ" ] || PROJ=default
+          export PROJ
+          echo "project=$PROJ"
+          TAG="run-$PROJ-$RUN_ID"
           mapfile -d '' FILES < <(find _publish -maxdepth 1 -type f -print0)
           if [ "${#FILES[@]}" -eq 0 ]; then
             echo "::error::没有可发布的文件"
@@ -171,14 +183,14 @@ jobs:
 
           # 发布失败 = 结果全丢，所以这里必须重试。
           # 注意：--notes 里不要用反引号，bash 会当命令替换执行。
-          NOTE="脚本 $SCRIPT_NAME；环境见 run_meta.json"
+          NOTE="项目 $PROJ · 脚本 $SCRIPT_NAME；环境见 run_meta.json"
           published=0
           for i in 1 2 3 4 5; do
             if gh release view "$TAG" --repo "$REPO" >/dev/null 2>&1; then
               gh release upload "$TAG" "${FILES[@]}" --repo "$REPO" --clobber && published=1 && break
             else
               gh release create "$TAG" "${FILES[@]}" \
-                --repo "$REPO" --title "run $RUN_ID" --notes "$NOTE" \
+                --repo "$REPO" --title "$PROJ · $SCRIPT_NAME · run $RUN_ID" --notes "$NOTE" \
                 && published=1 && break
             fi
             echo "::warning::发布第 $i 次失败，10 秒后重试"
