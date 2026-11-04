@@ -57,6 +57,10 @@ jobs:
             echo "::warning::toolenv/requirements.txt 缺失，远程环境为空"
           fi
 
+      # 环境装完立刻验一次：坏环境在这里就中止，不要等脚本跑完才发现
+      - name: 环境自检
+        run: python toolenv/selfcheck.py
+
       - name: 额外依赖
         if: inputs.requirements != ''
         env:
