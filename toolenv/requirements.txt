@@ -1,6 +1,3 @@
-# 工具库环境（py-sci）—— 与本地 envs/py-sci 同一套钉死版本。
-# 由 inline 工作流自动安装；研究员不需要自己装依赖。
-# 来源：Science/tools/src/py-sci/requirements.txt
 contourpy==1.4.0
 cycler==0.12.1
 fonttools==4.68.0
