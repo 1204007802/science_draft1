@@ -64,6 +64,7 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           RUN_ID: ${{ github.run_id }}
           SCRIPT_NAME: ${{ inputs.script_name }}
+          REPO: ${{ github.repository }}
         run: |
           set -eu
           mkdir -p _publish
@@ -73,8 +74,10 @@ jobs:
           fi
           echo "--- 待发布 ---"; ls -la _publish
           TAG="run-$RUN_ID"
+          # 没有 checkout，gh 无法从 .git 推断仓库，必须显式 --repo
           gh release create "$TAG" _publish/* \
+            --repo "$REPO" \
             --title "run $RUN_ID" \
             --notes "inline 工作流产物。原始脚本随附为资产，可直接复跑。" \
-            || gh release upload "$TAG" _publish/* --clobber
-          echo "RELEASE_TAG=$TAG"
+            || gh release upload "$TAG" _publish/* --repo "$REPO" --clobber
+          echo "RELEASE_URL=https://github.com/$REPO/releases/tag/$TAG"
