@@ -89,6 +89,7 @@ jobs:
           EXTRA_REQS: ${{ inputs.requirements }}
           TIMEOUT_MIN: ${{ inputs.timeout_min }}
           LABEL: ${{ inputs.label }}
+          REF: ${{ github.ref_name }}
           REPO: ${{ github.repository }}
         run: |
           set -eu
@@ -103,26 +104,55 @@ jobs:
             done < <(find outputs -type f -print0)
           fi
 
-          # 环境记录：让"可复跑"变成"可精确复现"
+          # 环境记录：让"可复跑"变成"可精确复现"。
+          # 同时记录实际装了什么——extra requirements 可能覆盖 toolenv 的版本。
           python - <<'PY'
-          import hashlib, json, os, platform, pathlib, sys
+          import hashlib, json, os, pathlib, platform, subprocess, sys
+
+          def parse_reqs(text):
+              out = {}
+              for line in text.splitlines():
+                  line = line.strip()
+                  if not line or line.startswith("#") or "==" not in line:
+                      continue
+                  k, v = line.split("==", 1)
+                  out[k.strip().lower()] = v.strip()
+              return out
+
+          freeze = subprocess.run([sys.executable, "-m", "pip", "freeze"],
+                                  capture_output=True, text=True).stdout
+          pathlib.Path("_publish/requirements.frozen.txt").write_text(
+              freeze, encoding="utf-8")
+
           env_file = pathlib.Path("toolenv/requirements.txt")
+          base = parse_reqs(env_file.read_text()) if env_file.exists() else {}
+          actual = parse_reqs(freeze)
+          drift = {k: {"expected": v, "actual": actual.get(k)}
+                   for k, v in base.items() if actual.get(k) != v}
+
           meta = {
               "run_id": os.environ["RUN_ID"],
               "label": os.environ.get("LABEL", ""),
               "script_name": os.environ["SCRIPT_NAME"],
               "extra_requirements": os.environ.get("EXTRA_REQS", ""),
               "timeout_min": os.environ.get("TIMEOUT_MIN", ""),
+              "ref": os.environ.get("REF", ""),
               "python": platform.python_version(),
               "runner_os": os.environ.get("RUNNER_OS", ""),
               "runner_image": os.environ.get("ImageOS", ""),
               "toolenv_requirements_sha256": (
                   hashlib.sha256(env_file.read_bytes()).hexdigest()
                   if env_file.exists() else None),
+              "frozen_sha256": hashlib.sha256(freeze.encode()).hexdigest(),
+              "toolenv_drift": drift,
           }
           pathlib.Path("_publish/run_meta.json").write_text(
               json.dumps(meta, ensure_ascii=False, indent=2), encoding="utf-8")
-          print("meta:", meta)
+          if drift:
+              print("::warning::extra requirements 覆盖了工具库版本:",
+                    json.dumps(drift, ensure_ascii=False))
+          else:
+              print("环境与工具库一致")
           PY
 
           echo "--- 待发布 ---"; ls -la _publish
