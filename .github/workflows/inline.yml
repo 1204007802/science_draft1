@@ -132,10 +132,24 @@ jobs:
             echo "::error::没有可发布的文件"
             exit 1
           fi
-          # 没有 checkout 的场景下 gh 无法推断仓库，显式 --repo
-          gh release create "$TAG" "${FILES[@]}" \
-            --repo "$REPO" \
-            --title "run $RUN_ID" \
-            --notes "脚本 `$SCRIPT_NAME`；环境见 run_meta.json" \
-            || gh release upload "$TAG" "${FILES[@]}" --repo "$REPO" --clobber
+
+          # 发布失败 = 结果全丢，所以这里必须重试。
+          # 注意：--notes 里不要用反引号，bash 会当命令替换执行。
+          NOTE="脚本 $SCRIPT_NAME；环境见 run_meta.json"
+          published=0
+          for i in 1 2 3 4 5; do
+            if gh release view "$TAG" --repo "$REPO" >/dev/null 2>&1; then
+              gh release upload "$TAG" "${FILES[@]}" --repo "$REPO" --clobber && published=1 && break
+            else
+              gh release create "$TAG" "${FILES[@]}" \
+                --repo "$REPO" --title "run $RUN_ID" --notes "$NOTE" \
+                && published=1 && break
+            fi
+            echo "::warning::发布第 $i 次失败，10 秒后重试"
+            sleep 10
+          done
+          if [ "$published" -ne 1 ]; then
+            echo "::error::发布失败，结果未落地。请重新 dispatch（会得到新的 run_id）。"
+            exit 1
+          fi
           echo "RELEASE_URL=https://github.com/$REPO/releases/tag/$TAG"
