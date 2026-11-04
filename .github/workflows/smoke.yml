@@ -1,0 +1,42 @@
+# 链路验证用。复制到仓库的 .github/workflows/ 下触发一次。
+name: smoke
+
+on:
+  workflow_dispatch:
+    inputs:
+      script:
+        description: '要执行的脚本路径'
+        required: true
+        default: 'main.py'
+      timeout_min:
+        description: '超时分钟（上限 360）'
+        required: false
+        default: '60'
+
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    timeout-minutes: ${{ fromJSON(inputs.timeout_min) }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: 依赖
+        run: |
+          python -m pip install --upgrade pip
+          [ -f requirements.txt ] && pip install -r requirements.txt || echo '无 requirements.txt'
+
+      - name: 执行
+        run: python "${{ inputs.script }}"
+
+      - name: 取回产物
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: outputs
+          path: outputs/
+          if-no-files-found: warn
+          retention-days: 7
