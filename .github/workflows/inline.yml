@@ -1,5 +1,6 @@
-# 不推代码：脚本正文通过 workflow_dispatch 输入传入，运行时落盘执行。
-# 结果发布到 GitHub Release（不是 artifact）：永久链接、公开可下、无需认证。
+# 不推代码：脚本正文通过 workflow_dispatch 输入传入。
+# 环境来自仓库里的 toolenv/（工具库投影），研究员不需要自己装依赖。
+# 结果发布到 GitHub Release：永久链接、公开可下、无需认证。
 name: inline
 
 on:
@@ -9,17 +10,23 @@ on:
         description: 'Python 脚本全文'
         required: true
       script_name:
-        description: '落盘文件名'
+        description: '落盘文件名（同时作为资产名）'
         required: false
         default: 'job.py'
       requirements:
-        description: '额外依赖，空格分隔（如 "numpy==2.5.4 scipy"）'
+        description: '额外依赖，空格分隔；工具库已含 numpy/scipy/matplotlib'
         required: false
         default: ''
       timeout_min:
-        description: '超时分钟（上限 360）'
+        description: '超时分钟，必须是整数字符串（默认 30，上限 360）'
         required: false
         default: '30'
+      label:
+        description: '给这次运行起个名字，便于在列表里认领'
+        required: false
+        default: ''
+
+run-name: "${{ inputs.script_name }} · ${{ inputs.label || github.actor }} · run ${{ github.run_id }}"
 
 permissions:
   contents: write      # 发布 Release 需要
@@ -29,9 +36,30 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: ${{ fromJSON(inputs.timeout_min) }}
     steps:
+      - name: 取工具库环境
+        uses: actions/checkout@v4
+        with:
+          sparse-checkout: toolenv
+          sparse-checkout-cone-mode: false
+
       - uses: actions/setup-python@v5
         with:
-          python-version: '3.12'
+          python-version: '3.14'
+
+      - name: 安装工具库环境
+        run: |
+          if [ -f toolenv/requirements.txt ]; then
+            python -m pip install --no-input --quiet -r toolenv/requirements.txt
+            echo "工具库环境已装：" && python -m pip list --format=freeze | wc -l
+          else
+            echo "::warning::toolenv/requirements.txt 缺失，远程环境为空"
+          fi
+
+      - name: 额外依赖
+        if: inputs.requirements != ''
+        env:
+          REQS: ${{ inputs.requirements }}
+        run: python -m pip install --no-input $REQS
 
       # 用 env 传，避免 ${{ }} 直接插进 shell 造成注入
       - name: 写入脚本
@@ -47,12 +75,6 @@ jobs:
                 len(os.environ["SCRIPT_BODY"]), "chars")
           PY
 
-      - name: 安装依赖
-        if: inputs.requirements != ''
-        env:
-          REQS: ${{ inputs.requirements }}
-        run: python -m pip install --no-input $REQS
-
       - name: 执行
         env:
           SCRIPT_NAME: ${{ inputs.script_name }}
@@ -64,20 +86,56 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           RUN_ID: ${{ github.run_id }}
           SCRIPT_NAME: ${{ inputs.script_name }}
+          EXTRA_REQS: ${{ inputs.requirements }}
+          TIMEOUT_MIN: ${{ inputs.timeout_min }}
+          LABEL: ${{ inputs.label }}
           REPO: ${{ github.repository }}
         run: |
           set -eu
           mkdir -p _publish
           [ -f "$SCRIPT_NAME" ] && cp "$SCRIPT_NAME" _publish/
-          if [ -d outputs ] && [ -n "$(ls -A outputs)" ]; then
-            cp -r outputs/. _publish/
+
+          # outputs/ 允许有子目录：拍平成一层的资产名，避免 gh 报 "is a directory" 而丢结果
+          if [ -d outputs ]; then
+            while IFS= read -r -d '' f; do
+              rel="${f#outputs/}"
+              cp "$f" "_publish/${rel//\//_}"
+            done < <(find outputs -type f -print0)
           fi
+
+          # 环境记录：让"可复跑"变成"可精确复现"
+          python - <<'PY'
+          import hashlib, json, os, platform, pathlib, sys
+          env_file = pathlib.Path("toolenv/requirements.txt")
+          meta = {
+              "run_id": os.environ["RUN_ID"],
+              "label": os.environ.get("LABEL", ""),
+              "script_name": os.environ["SCRIPT_NAME"],
+              "extra_requirements": os.environ.get("EXTRA_REQS", ""),
+              "timeout_min": os.environ.get("TIMEOUT_MIN", ""),
+              "python": platform.python_version(),
+              "runner_os": os.environ.get("RUNNER_OS", ""),
+              "runner_image": os.environ.get("ImageOS", ""),
+              "toolenv_requirements_sha256": (
+                  hashlib.sha256(env_file.read_bytes()).hexdigest()
+                  if env_file.exists() else None),
+          }
+          pathlib.Path("_publish/run_meta.json").write_text(
+              json.dumps(meta, ensure_ascii=False, indent=2), encoding="utf-8")
+          print("meta:", meta)
+          PY
+
           echo "--- 待发布 ---"; ls -la _publish
           TAG="run-$RUN_ID"
-          # 没有 checkout，gh 无法从 .git 推断仓库，必须显式 --repo
-          gh release create "$TAG" _publish/* \
+          mapfile -d '' FILES < <(find _publish -maxdepth 1 -type f -print0)
+          if [ "${#FILES[@]}" -eq 0 ]; then
+            echo "::error::没有可发布的文件"
+            exit 1
+          fi
+          # 没有 checkout 的场景下 gh 无法推断仓库，显式 --repo
+          gh release create "$TAG" "${FILES[@]}" \
             --repo "$REPO" \
             --title "run $RUN_ID" \
-            --notes "inline 工作流产物。原始脚本随附为资产，可直接复跑。" \
-            || gh release upload "$TAG" _publish/* --repo "$REPO" --clobber
+            --notes "脚本 `$SCRIPT_NAME`；环境见 run_meta.json" \
+            || gh release upload "$TAG" "${FILES[@]}" --repo "$REPO" --clobber
           echo "RELEASE_URL=https://github.com/$REPO/releases/tag/$TAG"
