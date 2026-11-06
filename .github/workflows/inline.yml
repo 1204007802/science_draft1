@@ -207,9 +207,13 @@ jobs:
             echo "::error::WOLFRAM_MATHPASS 未配置"; exit 1
           fi
           mkdir -p "$HOME/.WolframEngine/Licensing"
-          printf '%s' "$MATHPASS" > "$HOME/.WolframEngine/Licensing/mathpass"
+          # 原文件以换行结尾；GitHub 存 secret 时会吃掉尾部换行，这里补回来
+          printf '%s\n' "$MATHPASS" > "$HOME/.WolframEngine/Licensing/mathpass"
           chmod 600 "$HOME/.WolframEngine/Licensing/mathpass"
-          echo "mathpass 已写入 $(wc -c < "$HOME/.WolframEngine/Licensing/mathpass") 字节"
+          f="$HOME/.WolframEngine/Licensing/mathpass"
+          echo "字节: $(wc -c < "$f")  行数: $(wc -l < "$f")"
+          echo "各行长度: $(awk '{printf "%d ", length($0)}' "$f")"
+          echo "首字符: $(head -c 1 "$f")  含冒号行: $(grep -c ':' "$f" || true)"
           echo "--- 激活验证 ---"
           wolframscript -code '1+1'
 
