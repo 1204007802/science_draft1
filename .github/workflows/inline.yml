@@ -208,7 +208,8 @@ jobs:
           fi
           mkdir -p "$HOME/.WolframEngine/Licensing"
           # 原文件以换行结尾；GitHub 存 secret 时会吃掉尾部换行，这里补回来
-          printf '%s\n' "$MATHPASS" > "$HOME/.WolframEngine/Licensing/mathpass"
+          # 原始 mathpass 第二行以 TAB 结尾；secret 存储会剥掉尾随空白，这里补回来
+          printf '%s\t\n' "$MATHPASS" > "$HOME/.WolframEngine/Licensing/mathpass"
           chmod 600 "$HOME/.WolframEngine/Licensing/mathpass"
           f="$HOME/.WolframEngine/Licensing/mathpass"
           echo "字节: $(wc -c < "$f")  行数: $(wc -l < "$f")"
