@@ -183,11 +183,9 @@ jobs:
       # 安装包由 assets 提供（URL 每次触发现给），sha256 钉死后可命中缓存。
       - name: 安装 Wolfram Engine
         if: inputs.wolfram == 'true'
-        env:
-          ADIR: ${{ env.ASSETS_DIR }}
         run: |
           set -eu
-          sh=$(ls "$ADIR"/Wolfram*.sh 2>/dev/null | head -1)
+          sh=$(ls "${ASSETS_DIR:-_assets}"/Wolfram*.sh 2>/dev/null | head -1)
           [ -n "$sh" ] || { echo "::error::assets 里没有 Wolfram 安装包"; exit 1; }
           echo "安装包 $sh"
           sudo bash "$sh" -- -auto -targetdir=/opt/WolframEngine -execdir=/usr/local/bin
