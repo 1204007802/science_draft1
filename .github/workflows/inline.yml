@@ -33,6 +33,10 @@ on:
         description: '资源清单 JSON：[{"url":...,"sha256":...,"name":...}]。URL 每次触发现给，不进仓库'
         required: false
         default: '[]'
+      wolfram:
+        description: "true = 装 Wolfram Engine 15 并用 WOLFRAM_MATHPASS 配置许可"
+        required: false
+        default: 'false'
 
 run-name: "${{ inputs.project }} · ${{ inputs.script_name }} · ${{ inputs.label || github.actor }} · run ${{ github.run_id }}"
 
@@ -173,6 +177,43 @@ jobs:
           PY
           echo "ASSETS_DIR=$PWD/_assets" >> "$GITHUB_ENV"
           ls -lh _assets | sed 's/^/  /'
+
+      # ── 大型软件：Wolfram Engine ────────────────────────────────
+      # 安装器是交互式的，但 MathInstaller 自带 -auto，实测免交互、63 秒、rc=0。
+      # 安装包由 assets 提供（URL 每次触发现给），sha256 钉死后可命中缓存。
+      - name: 安装 Wolfram Engine
+        if: inputs.wolfram == 'true'
+        env:
+          ADIR: ${{ env.ASSETS_DIR }}
+        run: |
+          set -eu
+          sh=$(ls "$ADIR"/Wolfram*.sh 2>/dev/null | head -1)
+          [ -n "$sh" ] || { echo "::error::assets 里没有 Wolfram 安装包"; exit 1; }
+          echo "安装包 $sh"
+          sudo bash "$sh" -- -auto -targetdir=/opt/WolframEngine -execdir=/usr/local/bin
+          # -execdir 只链了 WolframKernel；wolframscript 装在另一个前缀下，手动补
+          sudo ln -sf /opt/Wolfram/WolframScript/bin/wolframscript /usr/local/bin/wolframscript
+          sudo ln -sf /opt/WolframEngine/Executables/wolfram /usr/local/bin/wolfram
+          wolframscript -version
+          wolfram -version
+
+      # 许可：secret 只在这一步出现，写进文件后立即消失。
+      # 绝不 echo 它的内容——仓库是 public，日志对外可见。
+      - name: 配置 Wolfram 许可
+        if: inputs.wolfram == 'true'
+        env:
+          MATHPASS: ${{ secrets.WOLFRAM_MATHPASS }}
+        run: |
+          set -eu
+          if [ -z "${MATHPASS:-}" ]; then
+            echo "::error::WOLFRAM_MATHPASS 未配置"; exit 1
+          fi
+          mkdir -p "$HOME/.WolframEngine/Licensing"
+          printf '%s' "$MATHPASS" > "$HOME/.WolframEngine/Licensing/mathpass"
+          chmod 600 "$HOME/.WolframEngine/Licensing/mathpass"
+          echo "mathpass 已写入 $(wc -c < "$HOME/.WolframEngine/Licensing/mathpass") 字节"
+          echo "--- 激活验证 ---"
+          wolframscript -code '1+1'
 
       - name: 额外依赖
         if: inputs.requirements != ''
