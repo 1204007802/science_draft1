@@ -29,6 +29,10 @@ on:
         description: '给这次运行起个名字，便于在列表里认领'
         required: false
         default: ''
+      assets:
+        description: '资源清单 JSON：[{"url":...,"sha256":...,"name":...}]。URL 每次触发现给，不进仓库'
+        required: false
+        default: '[]'
 
 run-name: "${{ inputs.project }} · ${{ inputs.script_name }} · ${{ inputs.label || github.actor }} · run ${{ github.run_id }}"
 
@@ -87,6 +91,88 @@ jobs:
       # 环境装完立刻验一次：坏环境在这里就中止，不要等脚本跑完才发现
       - name: 环境自检
         run: python toolenv/selfcheck.py
+
+      # ── 大资源：安装包、数据集、私有二进制 ──────────────────────────
+      # URL 走 dispatch 输入，不在仓库里留任何链接——所以签名过期与否无关。
+      # 按 sha256 缓存：内容没变就跳过下载，改了才重拉。
+      - name: 解析资源清单
+        id: assets
+        env:
+          ASSETS: ${{ inputs.assets }}
+        run: |
+          python - <<'PY'
+          import hashlib, json, os, pathlib, sys
+          raw = (os.environ.get("ASSETS") or "").strip() or "[]"
+          try:
+              items = json.loads(raw)
+          except Exception as e:
+              sys.exit(f"assets 不是合法 JSON：{e}")
+          if not isinstance(items, list):
+              sys.exit("assets 必须是数组")
+          for a in items:
+              if not isinstance(a, dict) or not a.get("url"):
+                  sys.exit(f"每条资源必须有 url：{a}")
+              a.setdefault("name", os.path.basename(a["url"].split("?")[0]) or "asset")
+          pathlib.Path("_assets").mkdir(exist_ok=True)
+          pathlib.Path("_assets/manifest.json").write_text(
+              json.dumps(items, ensure_ascii=False, indent=1), encoding="utf-8")
+          key = hashlib.sha256("|".join(sorted(
+              a.get("sha256") or a["url"] for a in items)).encode()).hexdigest()[:16]
+          print(f"{len(items)} 个资源，缓存键 {key}")
+          for a in items:
+              print(f"  {a['name']:<32} {(a.get('sha256') or '(无校验)')[:20]}")
+          with open(os.environ["GITHUB_OUTPUT"], "a") as fh:
+              fh.write(f"count={len(items)}\nkey={key}\n")
+          PY
+
+      - name: 缓存资源
+        if: steps.assets.outputs.count != '0'
+        uses: actions/cache@v4
+        with:
+          path: _assets
+          key: assets-${{ steps.assets.outputs.key }}
+
+      - name: 拉取资源
+        if: steps.assets.outputs.count != '0'
+        run: |
+          python - <<'PY'
+          import hashlib, json, pathlib, shutil, subprocess, sys
+
+          def sha256_of(path, chunk=8 << 20):
+              h = hashlib.sha256()
+              with open(path, "rb") as fh:
+                  while True:
+                      b = fh.read(chunk)
+                      if not b:
+                          break
+                      h.update(b)
+              return h.hexdigest()
+
+          items = json.loads(pathlib.Path("_assets/manifest.json").read_text(encoding="utf-8"))
+          for a in items:
+              dest = pathlib.Path("_assets") / a["name"]
+              want = (a.get("sha256") or "").lower()
+              if dest.exists():
+                  if want and sha256_of(dest) == want:
+                      print(f"  缓存命中  {a['name']}  ({dest.stat().st_size/1e6:.0f} MB)")
+                      continue
+                  if not want:
+                      print(f"  ::warning::无 sha256，跳过校验并重下 {a['name']}")
+              tmp = dest.with_suffix(dest.suffix + ".part")
+              print(f"  下载      {a['name']}")
+              r = subprocess.run(["curl", "-fL", "--retry", "5", "--retry-delay", "5",
+                                  "--retry-all-errors", "-C", "-", "-o", str(tmp), a["url"]])
+              if r.returncode != 0:
+                  sys.exit(f"下载失败：{a['name']}")
+              if want:
+                  got = sha256_of(tmp)
+                  if got != want:
+                      sys.exit(f"sha256 不符 {a['name']}\n  期望 {want}\n  实际 {got}")
+              tmp.replace(dest)
+              print(f"            {dest.stat().st_size/1e6:.0f} MB  校验通过")
+          PY
+          echo "ASSETS_DIR=$PWD/_assets" >> "$GITHUB_ENV"
+          ls -lh _assets | sed 's/^/  /'
 
       - name: 额外依赖
         if: inputs.requirements != ''
